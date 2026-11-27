@@ -306,15 +306,15 @@ MonoBehaviour:
   timerUrgentColor: {r: 1, g: 0.42, b: 0.56, a: 1}
   sfxSource: {fileID: 0}
   buttonClickClip: {fileID: 8300000, guid: 7bd4bf10658557a4fac071e6c32d2296, type: 3}
-  buttonClickVolume: 1.22
+  buttonClickVolume: 1.71
   buttonPitchJitter: 0.06
   typingClip: {fileID: 8300000, guid: 47d2153e6f3e55b41952e22ae95a9919, type: 3}
-  typingVolume: 1.49
+  typingVolume: 1.34
   typingPitchJitter: 0.1
   validWordClip: {fileID: 8300000, guid: 88fd9ab96bd191b449089bed63a49043, type: 3}
-  validWordVolume: 1.5
+  validWordVolume: 1.79
   invalidWordClip: {fileID: 8300000, guid: 0c9b9cb0688fe054f9e845ab442f2601, type: 3}
-  invalidWordVolume: 1.5
+  invalidWordVolume: 1.82
   winClip: {fileID: 8300000, guid: 213592c67a9369c4ab856e0ccb137c7f, type: 3}
   winVolume: 1.5
   flashTarget: {fileID: 438006749}
