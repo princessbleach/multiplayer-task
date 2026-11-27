@@ -34,7 +34,7 @@ public class WordChainGame : MonoBehaviour
         public bool gameStarted;
         public List<PlayerInfo> players = new List<PlayerInfo>();
 
-        // Face-off fields (string used instead of char for Unity JsonUtility compatibility)
+        // Face-off fields
         public bool faceOffActive;
         public string faceOffLetter;
         public double faceOffDeadline;
@@ -118,10 +118,10 @@ public class WordChainGame : MonoBehaviour
     [Range(0f, 2f)] public float winVolume = 1.5f;
 
     public Graphic flashTarget;
-    public Color validFlashColor = new Color(0.18f, 0.85f, 0.55f, 0.5f);
-    public Color invalidFlashColor = new Color(0.95f, 0.26f, 0.42f, 0.5f);
-    public Color winFlashColor = new Color(0.56f, 0.48f, 1f, 0.6f);
-    public float flashDuration = 0.25f;
+    public Color validFlashColor = new Color(0.18f, 0.85f, 0.55f, 0.35f);
+    public Color invalidFlashColor = new Color(0.95f, 0.26f, 0.42f, 0.35f);
+    public Color winFlashColor = new Color(0.56f, 0.48f, 1f, 0.45f);
+    public float flashDuration = 0.22f;
 
     [Header("Panels")]
     public GameObject rolePanel;
@@ -187,8 +187,6 @@ public class WordChainGame : MonoBehaviour
     private Vector2 _p1BasePos;
     private Vector2 _p2BasePos;
     private bool _basePositionsCaptured;
-    private float _pullPulseTimer;
-    private int _lastPullDirection;
     private Color _flashBaseColor;
     private bool _flashBaseCaptured;
 
@@ -197,13 +195,11 @@ public class WordChainGame : MonoBehaviour
     private float _faceOffRemaining;
     private bool _faceOffTimeoutHandled;
 
-    // Juice / Punch state
+    // Subtle typing punch state
     private Coroutine _wordInputPunchCoroutine;
     private Coroutine _faceOffInputPunchCoroutine;
-    private Coroutine _promptPopCoroutine;
     private Vector3 _wordInputBaseScale = Vector3.one;
     private Vector3 _faceOffInputBaseScale = Vector3.one;
-    private Vector3 _promptBaseScale = Vector3.one;
 
     private void Start()
     {
@@ -231,10 +227,6 @@ public class WordChainGame : MonoBehaviour
         if (faceOffWordInput != null)
         {
             _faceOffInputBaseScale = faceOffWordInput.transform.localScale;
-        }
-        if (promptText != null)
-        {
-            _promptBaseScale = promptText.transform.localScale;
         }
 
         ShowPanel(rolePanel);
@@ -300,16 +292,16 @@ public class WordChainGame : MonoBehaviour
     {
         UpdateTugVisuals();
 
-        // Face-off countdown & host resolution
-        if (_currentState != null && _currentState.gameStarted && _currentState.faceOffActive &&
-            faceOffPanel != null && faceOffPanel.activeInHierarchy)
+        // Face-off countdown & resolution (independent of panel hierarchy)
+        if (_currentState != null && _currentState.gameStarted && _currentState.faceOffActive)
         {
             double now = GetUnixTimeSeconds();
-            _faceOffRemaining = Mathf.Max(0f, (float)(_currentState.faceOffDeadline - now));
+            double rawRemaining = _currentState.faceOffDeadline - now;
+            _faceOffRemaining = Mathf.Max(0f, (float)rawRemaining);
 
+            int secs = Mathf.CeilToInt(_faceOffRemaining);
             if (faceOffTimerText != null)
             {
-                int secs = Mathf.CeilToInt(_faceOffRemaining);
                 faceOffTimerText.text = $"{secs}s";
                 if (useMidnightTheme)
                 {
@@ -317,18 +309,28 @@ public class WordChainGame : MonoBehaviour
                 }
             }
 
+            // If faceOffPanel is missing from Inspector, keep main game UI updated as fallback
+            if (faceOffPanel == null)
+            {
+                UpdateUI();
+            }
+
             int totalPlayers = _currentState.players != null ? _currentState.players.Count : 0;
             int totalEntries = _currentState.faceOffEntries != null ? _currentState.faceOffEntries.Count : 0;
             bool allSubmitted = totalPlayers > 0 && totalEntries >= totalPlayers;
+            bool isHost = _localPlayerId == _currentState.hostId;
+            bool hostTimedOut = rawRemaining <= -2.0; // Fallback if host dropped
 
             if ((_faceOffRemaining <= 0f || allSubmitted) &&
                 !_faceOffTimeoutHandled &&
-                _localPlayerId == _currentState.hostId &&
+                (isHost || hostTimedOut) &&
                 !_isSubmitting)
             {
                 _faceOffTimeoutHandled = true;
                 StartCoroutine(ResolveFaceOff());
             }
+
+            return;
         }
 
         if (_currentState == null || !_currentState.gameStarted || _currentState.faceOffActive ||
@@ -383,6 +385,12 @@ public class WordChainGame : MonoBehaviour
         if (lobbyPanel != null) lobbyPanel.SetActive(lobbyPanel == activePanel);
         if (faceOffPanel != null) faceOffPanel.SetActive(faceOffPanel == activePanel);
         if (gamePanel != null) gamePanel.SetActive(gamePanel == activePanel);
+
+        // Ensure activePanel stays visible even if it is a child of another panel
+        if (activePanel != null && !activePanel.activeSelf)
+        {
+            activePanel.SetActive(true);
+        }
     }
 
     private void ApplyMidnightTheme()
@@ -479,7 +487,7 @@ public class WordChainGame : MonoBehaviour
         PlayClipWithJitter(buttonClickClip, buttonClickVolume, buttonPitchJitter);
     }
 
-    // ---------------- JUICE / TYPING PUNCH ----------------
+    // ---------------- SUBTLE TYPING PUNCH ----------------
 
     private void OnWordValueChanged(string currentText)
     {
@@ -496,14 +504,14 @@ public class WordChainGame : MonoBehaviour
                 StopCoroutine(_wordInputPunchCoroutine);
             }
             _wordInputPunchCoroutine = StartCoroutine(
-                ScalePunchRoutine(wordInput.transform, _wordInputBaseScale, new Vector3(0.028f, 0.045f, 0f), 0.075f)
+                ScalePunchRoutine(wordInput.transform, _wordInputBaseScale, new Vector3(0.012f, 0.02f, 0f), 0.06f)
             );
         }
 
         if (_isSubmitting || typingClip == null || sfxSource == null) return;
 
-        if (_currentState != null && _currentState.gameStarted && !_currentState.faceOffActive &&
-            _currentState.activePlayerId == _localPlayerId &&
+        if (_currentState != null && _currentState.gameStarted &&
+            (_currentState.faceOffActive || _currentState.activePlayerId == _localPlayerId) &&
             Mathf.Abs(_currentState.score) < winThreshold)
         {
             PlayClipWithJitter(typingClip, typingVolume, typingPitchJitter);
@@ -525,7 +533,7 @@ public class WordChainGame : MonoBehaviour
                 StopCoroutine(_faceOffInputPunchCoroutine);
             }
             _faceOffInputPunchCoroutine = StartCoroutine(
-                ScalePunchRoutine(faceOffWordInput.transform, _faceOffInputBaseScale, new Vector3(0.028f, 0.045f, 0f), 0.075f)
+                ScalePunchRoutine(faceOffWordInput.transform, _faceOffInputBaseScale, new Vector3(0.012f, 0.02f, 0f), 0.06f)
             );
         }
 
@@ -533,18 +541,6 @@ public class WordChainGame : MonoBehaviour
         {
             PlayClipWithJitter(typingClip, typingVolume, typingPitchJitter);
         }
-    }
-
-    private void TriggerPromptPop()
-    {
-        if (promptText == null) return;
-        if (_promptPopCoroutine != null)
-        {
-            StopCoroutine(_promptPopCoroutine);
-        }
-        _promptPopCoroutine = StartCoroutine(
-            ScalePunchRoutine(promptText.transform, _promptBaseScale, new Vector3(0.07f, 0.07f, 0f), 0.16f)
-        );
     }
 
     private IEnumerator ScalePunchRoutine(Transform target, Vector3 baseScale, Vector3 boost, float duration)
@@ -689,45 +685,16 @@ public class WordChainGame : MonoBehaviour
 
         float shiftX = normalizedOffset * maxPullDistance;
 
-        if (_pullPulseTimer > 0f)
-        {
-            _pullPulseTimer = Mathf.Max(0f, _pullPulseTimer - Time.deltaTime);
-        }
-
-        float pulseWeight = _pullPulseTimer > 0f ? Mathf.Sin((_pullPulseTimer / 0.35f) * Mathf.PI) : 0f;
-        float bobY = Mathf.Sin(Time.time * 14f) * 6f * pulseWeight;
-
         if (player1Sprite != null)
         {
-            Vector2 targetP1 = new Vector2(_p1BasePos.x + shiftX, _p1BasePos.y + (_lastPullDirection < 0 ? bobY : 0f));
+            Vector2 targetP1 = new Vector2(_p1BasePos.x + shiftX, _p1BasePos.y);
             player1Sprite.anchoredPosition = Vector2.Lerp(player1Sprite.anchoredPosition, targetP1, Time.deltaTime * moveSpeed);
-
-            float leanZ1 = _lastPullDirection < 0 ? 10f * pulseWeight : 3f;
-            player1Sprite.localRotation = Quaternion.Lerp(player1Sprite.localRotation, Quaternion.Euler(0f, 0f, leanZ1), Time.deltaTime * moveSpeed);
         }
 
         if (player2Sprite != null)
         {
-            Vector2 targetP2 = new Vector2(_p2BasePos.x + shiftX, _p2BasePos.y + (_lastPullDirection > 0 ? bobY : 0f));
+            Vector2 targetP2 = new Vector2(_p2BasePos.x + shiftX, _p2BasePos.y);
             player2Sprite.anchoredPosition = Vector2.Lerp(player2Sprite.anchoredPosition, targetP2, Time.deltaTime * moveSpeed);
-
-            float leanZ2 = _lastPullDirection > 0 ? -10f * pulseWeight : -3f;
-            player2Sprite.localRotation = Quaternion.Lerp(player2Sprite.localRotation, Quaternion.Euler(0f, 0f, leanZ2), Time.deltaTime * moveSpeed);
-        }
-    }
-
-    private void TriggerPullFeedback(int previousScore, int nextScore)
-    {
-        int delta = nextScore - previousScore;
-        if (delta < 0)
-        {
-            _lastPullDirection = -1;
-            _pullPulseTimer = 0.35f;
-        }
-        else if (delta > 0)
-        {
-            _lastPullDirection = 1;
-            _pullPulseTimer = 0.35f;
         }
     }
 
@@ -814,13 +781,13 @@ public class WordChainGame : MonoBehaviour
             {
                 new PlayerInfo { id = 1, name = _localPlayerName, team = 1 }
             },
-            currentWord = "START",
+            currentWord = string.Empty,
             activeTeam = 1,
             activePlayerId = 1,
             team1TurnIndex = 0,
             team2TurnIndex = 0,
             score = 0,
-            usedWords = "START,",
+            usedWords = string.Empty,
             roundDuration = initialRoundDuration,
             turnStartUnix = GetUnixTimeSeconds(),
             lastActionText = "Waiting for players..."
@@ -992,8 +959,8 @@ public class WordChainGame : MonoBehaviour
         latest.faceOffLetter = chosenLetter;
         latest.faceOffDeadline = GetUnixTimeSeconds() + faceOffDuration;
         latest.faceOffEntries = new List<FaceOffEntry>();
-        latest.currentWord = "START";
-        latest.usedWords = "START,";
+        latest.currentWord = string.Empty;
+        latest.usedWords = string.Empty;
         latest.score = 0;
         latest.activeTeam = 1;
         latest.team1TurnIndex = 0;
@@ -1001,7 +968,7 @@ public class WordChainGame : MonoBehaviour
         latest.activePlayerId = team1[0].id;
         latest.roundDuration = initialRoundDuration;
         latest.turnStartUnix = GetUnixTimeSeconds();
-        latest.lastActionText = $"FACE-OFF!  LETTER: {chosenLetter}  ·  {Mathf.RoundToInt(faceOffDuration)} SECONDS!";
+        latest.lastActionText = $"FACE-OFF!  LETTER: {chosenLetter}";
 
         bool ok = false;
         yield return StartCoroutine(PutRoomState(latest, res => ok = res));
@@ -1076,28 +1043,56 @@ public class WordChainGame : MonoBehaviour
         _faceOffSubmitted = false;
         _faceOffTimeoutHandled = false;
         _previousFaceOffText = string.Empty;
-        if (faceOffWordInput != null)
-        {
-            faceOffWordInput.text = string.Empty;
-        }
+        _previousInputText = string.Empty;
+
+        char letter = GetCurrentFaceOffChar();
 
         if (faceOffPanel != null)
         {
+            if (faceOffWordInput != null)
+            {
+                faceOffWordInput.text = string.Empty;
+                faceOffWordInput.interactable = true;
+                if (faceOffWordInput.placeholder is TMP_Text ph)
+                {
+                    ph.text = $"Type longest '{letter}' word...";
+                }
+            }
             ShowPanel(faceOffPanel);
             UpdateFaceOffUI();
             FocusFaceOffInput();
         }
         else
         {
-            EnterGameScreen();
+            // Fallback if faceOffPanel wasn't wired in Inspector: use gamePanel cleanly with empty input
+            if (wordInput != null)
+            {
+                wordInput.text = string.Empty;
+                wordInput.interactable = true;
+                if (wordInput.placeholder is TMP_Text ph)
+                {
+                    ph.text = $"Type longest '{letter}' word...";
+                }
+            }
+            ShowPanel(gamePanel);
+            UpdateUI();
+            FocusInput();
         }
     }
 
     private void EnterGameScreen()
     {
+        if (wordInput != null)
+        {
+            _previousInputText = string.Empty;
+            wordInput.text = string.Empty;
+            if (wordInput.placeholder is TMP_Text ph)
+            {
+                ph.text = "Type a word...";
+            }
+        }
         ShowPanel(gamePanel);
         UpdateUI();
-        TriggerPromptPop();
         FocusInput();
     }
 
@@ -1169,7 +1164,7 @@ public class WordChainGame : MonoBehaviour
                     RoomState fetched = JsonUtility.FromJson<RoomState>(json);
                     if (fetched != null)
                     {
-                        int prevScore = _currentState != null ? _currentState.score : 0;
+                        bool wasFaceOff = _currentState != null && _currentState.faceOffActive;
                         bool wordChanged = _currentState == null || fetched.currentWord != _currentState.currentWord;
                         bool turnChanged = _currentState == null ||
                                            fetched.activePlayerId != _currentState.activePlayerId ||
@@ -1194,19 +1189,23 @@ public class WordChainGame : MonoBehaviour
                             if (fetched.faceOffActive)
                             {
                                 bool onFaceOff = faceOffPanel != null && faceOffPanel.activeInHierarchy;
-                                if (!onFaceOff)
+                                if (!wasFaceOff || (faceOffPanel != null && !onFaceOff))
                                 {
                                     EnterFaceOffScreen();
                                 }
-                                else
+                                else if (faceOffPanel != null)
                                 {
                                     UpdateFaceOffUI();
+                                }
+                                else
+                                {
+                                    UpdateUI();
                                 }
                             }
                             else
                             {
                                 bool onGame = gamePanel != null && gamePanel.activeInHierarchy;
-                                if (!onGame)
+                                if (!onGame || wasFaceOff)
                                 {
                                     EnterGameScreen();
                                 }
@@ -1214,11 +1213,6 @@ public class WordChainGame : MonoBehaviour
                                 if (turnChanged)
                                 {
                                     _timeoutHandledForTurn = false;
-                                    TriggerPullFeedback(prevScore, fetched.score);
-                                    if (wordChanged)
-                                    {
-                                        TriggerPromptPop();
-                                    }
                                 }
 
                                 UpdateUI();
@@ -1255,8 +1249,6 @@ public class WordChainGame : MonoBehaviour
             yield break;
         }
 
-        int prevScore = _currentState != null ? _currentState.score : 0;
-        bool wordChanged = _currentState == null || state.currentWord != _currentState.currentWord;
         string json = JsonUtility.ToJson(state);
         byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
 
@@ -1277,20 +1269,15 @@ public class WordChainGame : MonoBehaviour
 
                 _currentState = state;
                 _timeoutHandledForTurn = false;
-                TriggerPullFeedback(prevScore, state.score);
 
                 if (state.gameStarted)
                 {
-                    if (state.faceOffActive)
+                    if (state.faceOffActive && faceOffPanel != null)
                     {
                         UpdateFaceOffUI();
                     }
                     else
                     {
-                        if (wordChanged)
-                        {
-                            TriggerPromptPop();
-                        }
                         UpdateUI();
                     }
                 }
@@ -1355,7 +1342,7 @@ public class WordChainGame : MonoBehaviour
             }
             else
             {
-                faceOffStatusText.text = $"LONGEST WORD STARTING WITH '{letter}' WINS FIRST TURN  ·  PRESS ENTER";
+                faceOffStatusText.text = $"TYPE YOUR LONGEST WORD STARTING WITH '{letter}'  ·  PRESS ENTER";
             }
         }
     }
@@ -1370,13 +1357,52 @@ public class WordChainGame : MonoBehaviour
         return -1;
     }
 
+    private void SetActiveFaceOffStatus(string msg)
+    {
+        if (faceOffPanel != null && faceOffStatusText != null)
+        {
+            faceOffStatusText.text = msg;
+        }
+        else
+        {
+            SetStatus(msg);
+        }
+    }
+
+    private void ClearActiveFaceOffInput()
+    {
+        _previousFaceOffText = string.Empty;
+        _previousInputText = string.Empty;
+        if (faceOffPanel != null && faceOffWordInput != null)
+        {
+            faceOffWordInput.text = string.Empty;
+        }
+        else if (wordInput != null)
+        {
+            wordInput.text = string.Empty;
+        }
+    }
+
+    private void FocusActiveFaceOffInput()
+    {
+        if (_faceOffSubmitted) return;
+        if (faceOffPanel != null && faceOffWordInput != null)
+        {
+            FocusFaceOffInput();
+        }
+        else
+        {
+            FocusInput();
+        }
+    }
+
     private void OnFaceOffSubmitted(string rawInput)
     {
         if (_faceOffSubmitted || _isSubmitting) return;
         string word = (rawInput ?? string.Empty).Trim().ToUpperInvariant();
         if (string.IsNullOrEmpty(word))
         {
-            FocusFaceOffInput();
+            FocusActiveFaceOffInput();
             return;
         }
 
@@ -1384,17 +1410,14 @@ public class WordChainGame : MonoBehaviour
         {
             PlayClip(invalidWordClip, invalidWordVolume);
             TriggerFlash(invalidFlashColor);
-            if (faceOffStatusText != null)
-            {
-                faceOffStatusText.text = "Word must be 2+ letters (A-Z only).";
-            }
-            FocusFaceOffInput();
+            SetActiveFaceOffStatus("Word must be 2+ letters (A-Z only).");
+            FocusActiveFaceOffInput();
             return;
         }
 
         if (_currentState == null || !_currentState.faceOffActive)
         {
-            FocusFaceOffInput();
+            FocusActiveFaceOffInput();
             return;
         }
 
@@ -1403,11 +1426,8 @@ public class WordChainGame : MonoBehaviour
         {
             PlayClip(invalidWordClip, invalidWordVolume);
             TriggerFlash(invalidFlashColor);
-            if (faceOffStatusText != null)
-            {
-                faceOffStatusText.text = $"Word must start with '{required}'.";
-            }
-            FocusFaceOffInput();
+            SetActiveFaceOffStatus($"Word must start with '{required}'.");
+            FocusActiveFaceOffInput();
             return;
         }
 
@@ -1417,10 +1437,7 @@ public class WordChainGame : MonoBehaviour
     private IEnumerator SubmitFaceOffWord(string upperWord)
     {
         _isSubmitting = true;
-        if (faceOffStatusText != null)
-        {
-            faceOffStatusText.text = $"Checking '{upperWord}'...";
-        }
+        SetActiveFaceOffStatus($"Checking '{upperWord}'...");
 
         bool valid = false;
         using (UnityWebRequest req = UnityWebRequest.Get(DictionaryApiBase + upperWord.ToLowerInvariant()))
@@ -1433,17 +1450,10 @@ public class WordChainGame : MonoBehaviour
         {
             PlayClip(invalidWordClip, invalidWordVolume);
             TriggerFlash(invalidFlashColor);
-            if (faceOffStatusText != null)
-            {
-                faceOffStatusText.text = $"'{upperWord}' is not a valid English word. Try again!";
-            }
-            if (faceOffWordInput != null)
-            {
-                _previousFaceOffText = string.Empty;
-                faceOffWordInput.text = string.Empty;
-            }
+            SetActiveFaceOffStatus($"'{upperWord}' is not a valid English word. Try again!");
+            ClearActiveFaceOffInput();
             _isSubmitting = false;
-            FocusFaceOffInput();
+            FocusActiveFaceOffInput();
             yield break;
         }
 
@@ -1495,7 +1505,14 @@ public class WordChainGame : MonoBehaviour
         yield return StartCoroutine(PutRoomState(latest, null));
 
         _isSubmitting = false;
-        UpdateFaceOffUI();
+        if (faceOffPanel != null)
+        {
+            UpdateFaceOffUI();
+        }
+        else
+        {
+            UpdateUI();
+        }
     }
 
     private IEnumerator ResolveFaceOff()
@@ -1537,22 +1554,26 @@ public class WordChainGame : MonoBehaviour
         }
 
         int startingTeam;
+        string startingWord;
         string resultText;
         if (best1Len >= best2Len && best1Len > 0)
         {
             startingTeam = 1;
+            startingWord = best1Word;
             string winnerName = GetPlayerName(latest, best1PlayerId).ToUpperInvariant();
-            resultText = $"FACE-OFF: TEAM 1 FIRST! ({winnerName}: {best1Word} · {best1Len}L)";
+            resultText = $"FACE-OFF: TEAM 1 FIRST! ({winnerName}: {best1Word})";
         }
         else if (best2Len > best1Len && best2Len > 0)
         {
             startingTeam = 2;
+            startingWord = best2Word;
             string winnerName = GetPlayerName(latest, best2PlayerId).ToUpperInvariant();
-            resultText = $"FACE-OFF: TEAM 2 FIRST! ({winnerName}: {best2Word} · {best2Len}L)";
+            resultText = $"FACE-OFF: TEAM 2 FIRST! ({winnerName}: {best2Word})";
         }
         else
         {
             startingTeam = 1;
+            startingWord = GetCurrentFaceOffChar().ToString();
             resultText = "FACE-OFF TIE! TEAM 1 GOES FIRST.";
         }
 
@@ -1560,6 +1581,8 @@ public class WordChainGame : MonoBehaviour
         int firstPlayerId = startTeam.Count > 0 ? startTeam[0].id : _localPlayerId;
 
         latest.faceOffActive = false;
+        latest.currentWord = startingWord;
+        latest.usedWords = startingWord.Length > 1 ? startingWord + "," : string.Empty;
         latest.activeTeam = startingTeam;
         latest.team1TurnIndex = 0;
         latest.team2TurnIndex = 0;
@@ -1590,6 +1613,13 @@ public class WordChainGame : MonoBehaviour
     {
         if (_isSubmitting) return;
 
+        // If faceOffPanel wasn't wired in Inspector, route main wordInput to Face-Off submission
+        if (_currentState != null && _currentState.gameStarted && _currentState.faceOffActive)
+        {
+            OnFaceOffSubmitted(rawInput);
+            return;
+        }
+
         string word = (rawInput ?? string.Empty).Trim();
         if (string.IsNullOrEmpty(word))
         {
@@ -1603,7 +1633,7 @@ public class WordChainGame : MonoBehaviour
             return;
         }
 
-        if (_currentState == null || !_currentState.gameStarted || _currentState.faceOffActive)
+        if (_currentState == null || !_currentState.gameStarted)
         {
             SetStatus("Waiting for match...");
             FocusInput();
@@ -1682,13 +1712,13 @@ public class WordChainGame : MonoBehaviour
             faceOffLetter = chosenLetter,
             faceOffDeadline = GetUnixTimeSeconds() + faceOffDuration,
             faceOffEntries = new List<FaceOffEntry>(),
-            currentWord = "START",
+            currentWord = string.Empty,
             activeTeam = 1,
             activePlayerId = _localPlayerId,
             team1TurnIndex = 0,
             team2TurnIndex = 0,
             score = 0,
-            usedWords = "START,",
+            usedWords = string.Empty,
             roundDuration = initialRoundDuration,
             turnStartUnix = GetUnixTimeSeconds(),
             lastActionText = $"REMATCH FACE-OFF!  LETTER: {chosenLetter}"
@@ -1949,6 +1979,48 @@ public class WordChainGame : MonoBehaviour
             gameTeam2RosterText.text = BuildGameTeamRoster(_currentState, 2);
         }
 
+        // Fallback display if faceOffPanel is not assigned in Inspector
+        if (_currentState.faceOffActive)
+        {
+            char letter = GetCurrentFaceOffChar();
+            int secs = Mathf.CeilToInt(_faceOffRemaining);
+
+            if (roundText != null)
+            {
+                roundText.text = $"ROOM {_currentState.roomCode}  ·  OPENING FACE-OFF";
+            }
+            if (promptText != null)
+            {
+                promptText.text = $"<color=#{ColorUtility.ToHtmlStringRGB(promptAccentColor)}>STARTING LETTER</color>\n{letter}\n<size=46%><color=#{ColorUtility.ToHtmlStringRGB(promptAccentColor)}>LONGEST WORD GOES FIRST  ·  {secs}S</color></size>";
+            }
+            if (timerText != null)
+            {
+                timerText.text = $"{secs}s";
+            }
+            if (timerBar != null)
+            {
+                timerBar.fillAmount = faceOffDuration > 0.01f ? Mathf.Clamp01(_faceOffRemaining / faceOffDuration) : 0f;
+            }
+            if (wordInput != null)
+            {
+                wordInput.interactable = !_faceOffSubmitted;
+            }
+            if (!_isSubmitting)
+            {
+                int subCount = _currentState.faceOffEntries != null ? _currentState.faceOffEntries.Count : 0;
+                int totalCount = _currentState.players != null ? _currentState.players.Count : 0;
+                SetStatus(_faceOffSubmitted
+                    ? $"WORD SUBMITTED  ·  {subCount}/{totalCount} READY ({secs}S)"
+                    : $"TYPE LONGEST '{letter}' WORD & PRESS ENTER ({secs}S)");
+            }
+            return;
+        }
+
+        if (wordInput != null)
+        {
+            wordInput.interactable = true;
+        }
+
         if (roundText != null)
         {
             roundText.text = $"ROOM {_currentState.roomCode}  ·  ROUND {GetCurrentRoundNumber()}";
@@ -1956,7 +2028,9 @@ public class WordChainGame : MonoBehaviour
 
         if (promptText != null)
         {
-            string word = _currentState.currentWord.ToUpperInvariant();
+            string word = string.IsNullOrEmpty(_currentState.currentWord)
+                ? GetCurrentFaceOffChar().ToString()
+                : _currentState.currentWord.ToUpperInvariant();
             char nextLetter = word[word.Length - 1];
             promptText.text = $"<color=#{ColorUtility.ToHtmlStringRGB(promptAccentColor)}>CHAIN WORD</color>\n{word}\n<size=46%><color=#{ColorUtility.ToHtmlStringRGB(promptAccentColor)}>NEXT LETTER: {nextLetter}  ·  LONGER WORDS = MORE PULL</color></size>";
         }
@@ -2008,7 +2082,7 @@ public class WordChainGame : MonoBehaviour
         for (int i = 0; i < list.Count; i++)
         {
             PlayerInfo p = list[i];
-            bool isTurn = p.id == state.activePlayerId && Mathf.Abs(state.score) < winThreshold;
+            bool isTurn = !state.faceOffActive && p.id == state.activePlayerId && Mathf.Abs(state.score) < winThreshold;
             string prefix = isTurn ? ">> " : "   ";
             string youTag = p.id == _localPlayerId ? " (YOU)" : "";
             sb.AppendLine($"{prefix}{p.name}{youTag}");
