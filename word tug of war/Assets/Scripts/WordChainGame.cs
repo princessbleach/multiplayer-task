@@ -15,11 +15,77 @@ public class WordChainGame : MonoBehaviour
         public int turn;
         public int score;
         public string usedWords;
+        public float roundDuration;
+        public double turnStartUnix;
     }
 
     [Header("Firebase Configuration")]
     [Tooltip("Base URL of your Firebase Realtime Database (e.g. https://your-project-default-rtdb.firebaseio.com)")]
     public string firebaseUrl = "https://your-project-default-rtdb.firebaseio.com";
+
+    [Header("Timer Settings")]
+    [Tooltip("Starting timer duration in seconds for turn 1")]
+    public float initialRoundDuration = 60f;
+    [Tooltip("How many seconds to subtract after each completed turn")]
+    public float timerDecreasePerTurn = 5f;
+    [Tooltip("Minimum allowed timer duration per turn in seconds")]
+    public float minRoundDuration = 10f;
+
+    [Header("Tug-of-War Sprites")]
+    [Tooltip("Transform for Player 1's character (works for both 2D SpriteRenderer and UI Image)")]
+    public RectTransform player1Sprite;
+    [Tooltip("Transform for Player 2's character (works for both 2D SpriteRenderer and UI Image)")]
+    public RectTransform player2Sprite;
+    [Tooltip("Optional center anchor; if null, each sprite's starting position is used as center")]
+    public RectTransform tugTrackCenter;
+    [Tooltip("Max horizontal distance (in UI units or world units) sprites shift at +/-15 score")]
+    public float maxPullDistance = 220f;
+    [Tooltip("How fast sprites slide toward the current score")]
+    public float moveSpeed = 8f;
+
+    [Header("Krillion-Inspired Theme")]
+    [Tooltip("Applies a clean, high-contrast midnight-violet Krillion-style UI palette on start")]
+    public bool useKrillionTheme = true;
+    public Color backdropColor = new Color(0.043f, 0.051f, 0.110f, 0.98f);
+    public Color cardSurfaceColor = new Color(0.086f, 0.102f, 0.204f, 1f);
+    public Color buttonNormalColor = new Color(0.34f, 0.24f, 0.78f, 1f);
+    public Color buttonHighlightedColor = new Color(0.45f, 0.34f, 0.92f, 1f);
+    public Color buttonPressedColor = new Color(0.24f, 0.16f, 0.56f, 1f);
+    public Color primaryTextColor = new Color(0.96f, 0.97f, 1f, 1f);
+    public Color promptAccentColor = new Color(0.62f, 0.56f, 1f, 1f);
+    public Color timerBarColor = new Color(0.55f, 0.48f, 1f, 1f);
+    public Color timerUrgentColor = new Color(1f, 0.42f, 0.56f, 1f);
+
+    [Header("Audio & Flash Feedback")]
+    [Tooltip("AudioSource used to play sound effects (auto-added if left empty)")]
+    public AudioSource sfxSource;
+
+    public AudioClip buttonClickClip;
+    [Range(0f, 2f)] public float buttonClickVolume = 1f;
+    [Tooltip("Random +/- pitch variation on button click sounds (0 for exact pitch)")]
+    public float buttonPitchJitter = 0.06f;
+
+    public AudioClip typingClip;
+    [Range(0f, 2f)] public float typingVolume = 0.35f;
+    [Tooltip("Random +/- pitch variation on typing sounds (0 for exact pitch)")]
+    public float typingPitchJitter = 0.05f;
+
+    public AudioClip validWordClip;
+    [Range(0f, 2f)] public float validWordVolume = 1.5f;
+
+    public AudioClip invalidWordClip;
+    [Range(0f, 2f)] public float invalidWordVolume = 1.5f;
+
+    public AudioClip winClip;
+    [Range(0f, 2f)] public float winVolume = 1.5f;
+
+    [Tooltip("UI Image or Graphic that flashes color on valid, invalid, or win events")]
+    public Graphic flashTarget;
+    public Color validFlashColor = new Color(0.18f, 0.85f, 0.55f, 0.5f);
+    public Color invalidFlashColor = new Color(0.95f, 0.26f, 0.42f, 0.5f);
+    public Color winFlashColor = new Color(0.56f, 0.48f, 1f, 0.6f);
+    [Tooltip("How long each color flash lasts in seconds")]
+    public float flashDuration = 0.25f;
 
     [Header("Panels")]
     public GameObject rolePanel;
@@ -33,6 +99,12 @@ public class WordChainGame : MonoBehaviour
     public TMP_Text scoreText;
     public TMP_Text promptText;
     public TMP_Text statusText;
+    [Tooltip("Optional: displays the current round number.")]
+    public TMP_Text roundText;
+    [Tooltip("Optional: assign a TMP_Text for the timer. If null, timer shows in statusText.")]
+    public TMP_Text timerText;
+    [Tooltip("Optional: UI Image set to Type = Filled (Horizontal) for a Krillion-style timer bar.")]
+    public Image timerBar;
     public TMP_InputField wordInput;
 
     private const float PollInterval = 0.6f;
@@ -41,21 +113,85 @@ public class WordChainGame : MonoBehaviour
 
     private int _playerId;
     private GameState _currentState;
+    private string _previousInputText = string.Empty;
+    private float _remainingTime;
+    private bool _timeoutHandledForTurn;
+    private bool _winSoundPlayed;
     private bool _isSubmitting;
     private bool _isPolling;
     private Coroutine _pollCoroutine;
+    private Coroutine _flashCoroutine;
+
+    private Vector2 _p1BasePos;
+    private Vector2 _p2BasePos;
+    private bool _basePositionsCaptured;
+    private float _pullPulseTimer;
+    private int _lastPullDirection;
+    private Color _flashBaseColor;
+    private bool _flashBaseCaptured;
 
     private void Start()
     {
+        if (sfxSource == null)
+        {
+            sfxSource = GetComponent<AudioSource>();
+            if (sfxSource == null)
+            {
+                sfxSource = gameObject.AddComponent<AudioSource>();
+            }
+        }
+
+        if (useKrillionTheme)
+        {
+            ApplyKrillionTheme();
+        }
+
+        CaptureBaseSpritePositions();
+        CaptureFlashBaseColor();
+
         if (rolePanel != null) rolePanel.SetActive(true);
         if (gamePanel != null) gamePanel.SetActive(false);
 
-        if (p1Button != null) p1Button.onClick.AddListener(() => JoinAsPlayer(1));
-        if (p2Button != null) p2Button.onClick.AddListener(() => JoinAsPlayer(2));
+        if (p1Button != null)
+        {
+            p1Button.onClick.AddListener(PlayButtonClick);
+            p1Button.onClick.AddListener(() => JoinAsPlayer(1));
+        }
+
+        if (p2Button != null)
+        {
+            p2Button.onClick.AddListener(PlayButtonClick);
+            p2Button.onClick.AddListener(() => JoinAsPlayer(2));
+        }
 
         if (wordInput != null)
         {
+            _previousInputText = wordInput.text ?? string.Empty;
+            wordInput.onValueChanged.AddListener(OnWordValueChanged);
             wordInput.onSubmit.AddListener(OnWordSubmitted);
+        }
+    }
+
+    private void Update()
+    {
+        UpdateTugSprites();
+
+        if (_currentState == null || gamePanel == null || !gamePanel.activeInHierarchy)
+            return;
+
+        if (Mathf.Abs(_currentState.score) >= WinThreshold)
+            return;
+
+        double now = GetUnixTimeSeconds();
+        double elapsed = Math.Max(0.0, now - _currentState.turnStartUnix);
+        _remainingTime = Mathf.Max(0f, _currentState.roundDuration - (float)elapsed);
+
+        UpdateTimerDisplay();
+
+        if (_remainingTime <= 0f && !_isSubmitting && _currentState.turn == _playerId && !_timeoutHandledForTurn)
+        {
+            _timeoutHandledForTurn = true;
+            StartCoroutine(HandleTurnTimeout());
         }
     }
 
@@ -63,7 +199,223 @@ public class WordChainGame : MonoBehaviour
     {
         if (p1Button != null) p1Button.onClick.RemoveAllListeners();
         if (p2Button != null) p2Button.onClick.RemoveAllListeners();
-        if (wordInput != null) wordInput.onSubmit.RemoveListener(OnWordSubmitted);
+        if (wordInput != null)
+        {
+            wordInput.onValueChanged.RemoveListener(OnWordValueChanged);
+            wordInput.onSubmit.RemoveListener(OnWordSubmitted);
+        }
+    }
+
+    private void ApplyKrillionTheme()
+    {
+        StylePanel(rolePanel, backdropColor);
+        StylePanel(gamePanel, backdropColor);
+
+        StyleButton(p1Button);
+        StyleButton(p2Button);
+
+        if (scoreText != null) scoreText.color = primaryTextColor;
+        if (promptText != null) promptText.color = primaryTextColor;
+        if (statusText != null) statusText.color = promptAccentColor;
+        if (roundText != null) roundText.color = promptAccentColor;
+        if (timerText != null) timerText.color = primaryTextColor;
+        if (timerBar != null) timerBar.color = timerBarColor;
+
+        if (wordInput != null)
+        {
+            if (wordInput.targetGraphic != null)
+            {
+                wordInput.targetGraphic.color = cardSurfaceColor;
+            }
+            if (wordInput.textComponent != null)
+            {
+                wordInput.textComponent.color = primaryTextColor;
+            }
+            if (wordInput.placeholder is TMP_Text placeholderTmp)
+            {
+                placeholderTmp.color = new Color(promptAccentColor.r, promptAccentColor.g, promptAccentColor.b, 0.5f);
+            }
+        }
+    }
+
+    private void StylePanel(GameObject panel, Color color)
+    {
+        if (panel == null) return;
+        Image panelImage = panel.GetComponent<Image>();
+        if (panelImage != null)
+        {
+            panelImage.color = color;
+        }
+    }
+
+    private void StyleButton(Button button)
+    {
+        if (button == null) return;
+
+        ColorBlock colors = button.colors;
+        colors.normalColor = buttonNormalColor;
+        colors.highlightedColor = buttonHighlightedColor;
+        colors.selectedColor = buttonHighlightedColor;
+        colors.pressedColor = buttonPressedColor;
+        button.colors = colors;
+
+        if (button.targetGraphic != null)
+        {
+            button.targetGraphic.color = Color.white;
+        }
+
+        TMP_Text label = button.GetComponentInChildren<TMP_Text>();
+        if (label != null)
+        {
+            label.color = primaryTextColor;
+        }
+    }
+
+    public void PlayButtonClick()
+    {
+        PlayClipWithJitter(buttonClickClip, buttonClickVolume, buttonPitchJitter);
+    }
+
+    private void OnWordValueChanged(string currentText)
+    {
+        string safeText = currentText ?? string.Empty;
+        bool addedCharacter = safeText.Length > _previousInputText.Length;
+        _previousInputText = safeText;
+
+        if (!addedCharacter || _isSubmitting || typingClip == null || sfxSource == null)
+            return;
+
+        if (_currentState != null && _currentState.turn == _playerId && Mathf.Abs(_currentState.score) < WinThreshold)
+        {
+            PlayClipWithJitter(typingClip, typingVolume, typingPitchJitter);
+        }
+    }
+
+    private void PlayClipWithJitter(AudioClip clip, float volume, float pitchJitter)
+    {
+        if (sfxSource == null || clip == null) return;
+
+        float originalPitch = sfxSource.pitch;
+        sfxSource.pitch = pitchJitter > 0f
+            ? 1f + UnityEngine.Random.Range(-pitchJitter, pitchJitter)
+            : 1f;
+
+        sfxSource.PlayOneShot(clip, volume);
+        sfxSource.pitch = originalPitch;
+    }
+
+    private void CaptureFlashBaseColor()
+    {
+        if (_flashBaseCaptured || flashTarget == null) return;
+        _flashBaseColor = flashTarget.color;
+        _flashBaseCaptured = true;
+    }
+
+    private void PlayClip(AudioClip clip, float volume = 1f)
+    {
+        if (sfxSource != null && clip != null)
+        {
+            sfxSource.pitch = 1f;
+            sfxSource.PlayOneShot(clip, volume);
+        }
+    }
+
+    private void TriggerFlash(Color targetColor)
+    {
+        if (flashTarget == null) return;
+        CaptureFlashBaseColor();
+
+        if (_flashCoroutine != null)
+        {
+            StopCoroutine(_flashCoroutine);
+        }
+        _flashCoroutine = StartCoroutine(FlashColorRoutine(targetColor));
+    }
+
+    private IEnumerator FlashColorRoutine(Color targetColor)
+    {
+        flashTarget.color = targetColor;
+        float half = Mathf.Max(0.02f, flashDuration * 0.5f);
+        float elapsed = 0f;
+
+        while (elapsed < half)
+        {
+            elapsed += Time.deltaTime;
+            flashTarget.color = Color.Lerp(targetColor, _flashBaseColor, elapsed / half);
+            yield return null;
+        }
+
+        flashTarget.color = _flashBaseColor;
+        _flashCoroutine = null;
+    }
+
+    private void CaptureBaseSpritePositions()
+    {
+        if (_basePositionsCaptured) return;
+
+        if (tugTrackCenter != null)
+        {
+            _p1BasePos = tugTrackCenter.anchoredPosition;
+            _p2BasePos = tugTrackCenter.anchoredPosition;
+        }
+        else
+        {
+            if (player1Sprite != null) _p1BasePos = player1Sprite.anchoredPosition;
+            if (player2Sprite != null) _p2BasePos = player2Sprite.anchoredPosition;
+        }
+
+        _basePositionsCaptured = true;
+    }
+
+    private void UpdateTugSprites()
+    {
+        if (player1Sprite == null && player2Sprite == null) return;
+        CaptureBaseSpritePositions();
+
+        int score = _currentState != null ? Mathf.Clamp(_currentState.score, -WinThreshold, WinThreshold) : 0;
+        float normalizedOffset = (float)score / WinThreshold;
+        float shiftX = normalizedOffset * maxPullDistance;
+
+        if (_pullPulseTimer > 0f)
+        {
+            _pullPulseTimer = Mathf.Max(0f, _pullPulseTimer - Time.deltaTime);
+        }
+
+        float pulseWeight = _pullPulseTimer > 0f ? Mathf.Sin((_pullPulseTimer / 0.35f) * Mathf.PI) : 0f;
+        float bobY = Mathf.Sin(Time.time * 14f) * 6f * pulseWeight;
+
+        if (player1Sprite != null)
+        {
+            Vector2 targetP1 = new Vector2(_p1BasePos.x + shiftX, _p1BasePos.y + (_lastPullDirection < 0 ? bobY : 0f));
+            player1Sprite.anchoredPosition = Vector2.Lerp(player1Sprite.anchoredPosition, targetP1, Time.deltaTime * moveSpeed);
+
+            float leanZ1 = _lastPullDirection < 0 ? 10f * pulseWeight : 3f;
+            player1Sprite.localRotation = Quaternion.Lerp(player1Sprite.localRotation, Quaternion.Euler(0f, 0f, leanZ1), Time.deltaTime * moveSpeed);
+        }
+
+        if (player2Sprite != null)
+        {
+            Vector2 targetP2 = new Vector2(_p2BasePos.x + shiftX, _p2BasePos.y + (_lastPullDirection > 0 ? bobY : 0f));
+            player2Sprite.anchoredPosition = Vector2.Lerp(player2Sprite.anchoredPosition, targetP2, Time.deltaTime * moveSpeed);
+
+            float leanZ2 = _lastPullDirection > 0 ? -10f * pulseWeight : -3f;
+            player2Sprite.localRotation = Quaternion.Lerp(player2Sprite.localRotation, Quaternion.Euler(0f, 0f, leanZ2), Time.deltaTime * moveSpeed);
+        }
+    }
+
+    private void TriggerPullFeedback(int previousScore, int nextScore)
+    {
+        int delta = nextScore - previousScore;
+        if (delta < 0)
+        {
+            _lastPullDirection = -1;
+            _pullPulseTimer = 0.35f;
+        }
+        else if (delta > 0)
+        {
+            _lastPullDirection = 1;
+            _pullPulseTimer = 0.35f;
+        }
     }
 
     public void JoinAsPlayer(int playerNumber)
@@ -138,7 +490,29 @@ public class WordChainGame : MonoBehaviour
                     GameState fetched = JsonUtility.FromJson<GameState>(json);
                     if (fetched != null && !string.IsNullOrEmpty(fetched.currentWord))
                     {
+                        int prevScore = _currentState != null ? _currentState.score : 0;
+                        bool turnChanged = _currentState == null ||
+                                           fetched.turn != _currentState.turn ||
+                                           fetched.currentWord != _currentState.currentWord ||
+                                           Math.Abs(fetched.turnStartUnix - _currentState.turnStartUnix) > 0.01;
+
+                        if (fetched.roundDuration <= 0f)
+                        {
+                            fetched.roundDuration = initialRoundDuration;
+                        }
+
+                        if (Mathf.Abs(fetched.score) < WinThreshold)
+                        {
+                            _winSoundPlayed = false;
+                        }
+
                         _currentState = fetched;
+                        if (turnChanged)
+                        {
+                            _timeoutHandledForTurn = false;
+                            TriggerPullFeedback(prevScore, fetched.score);
+                        }
+
                         UpdateUI();
                     }
                 }
@@ -160,6 +534,7 @@ public class WordChainGame : MonoBehaviour
         string url = GetRoomUrl();
         if (string.IsNullOrEmpty(url)) yield break;
 
+        int prevScore = _currentState != null ? _currentState.score : 0;
         string json = JsonUtility.ToJson(state);
         byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
 
@@ -173,7 +548,14 @@ public class WordChainGame : MonoBehaviour
 
             if (request.result == UnityWebRequest.Result.Success)
             {
+                if (Mathf.Abs(state.score) < WinThreshold)
+                {
+                    _winSoundPlayed = false;
+                }
+
                 _currentState = state;
+                _timeoutHandledForTurn = false;
+                TriggerPullFeedback(prevScore, state.score);
                 UpdateUI();
             }
             else
@@ -216,6 +598,8 @@ public class WordChainGame : MonoBehaviour
 
         if (_currentState.turn != _playerId)
         {
+            PlayClip(invalidWordClip, invalidWordVolume);
+            TriggerFlash(invalidFlashColor);
             SetStatus($"Not your turn! Waiting for Player {_currentState.turn}.");
             FocusInput();
             return;
@@ -225,6 +609,8 @@ public class WordChainGame : MonoBehaviour
 
         if (!IsAlphabetic(upperWord) || upperWord.Length < 2)
         {
+            PlayClip(invalidWordClip, invalidWordVolume);
+            TriggerFlash(invalidFlashColor);
             SetStatus("Word must be at least 2 letters (A-Z only).");
             FocusInput();
             return;
@@ -233,6 +619,8 @@ public class WordChainGame : MonoBehaviour
         char requiredChar = char.ToUpperInvariant(_currentState.currentWord[_currentState.currentWord.Length - 1]);
         if (upperWord[0] != requiredChar)
         {
+            PlayClip(invalidWordClip, invalidWordVolume);
+            TriggerFlash(invalidFlashColor);
             SetStatus($"Word must start with '{requiredChar}'.");
             FocusInput();
             return;
@@ -240,6 +628,8 @@ public class WordChainGame : MonoBehaviour
 
         if (IsWordAlreadyUsed(upperWord, _currentState.usedWords))
         {
+            PlayClip(invalidWordClip, invalidWordVolume);
+            TriggerFlash(invalidFlashColor);
             SetStatus($"'{upperWord}' has already been used.");
             FocusInput();
             return;
@@ -251,10 +641,39 @@ public class WordChainGame : MonoBehaviour
     private IEnumerator HandleReset()
     {
         _isSubmitting = true;
+        _winSoundPlayed = false;
         SetStatus("Resetting match...");
         ClearInput();
 
         yield return StartCoroutine(PutGameState(CreateDefaultState()));
+
+        _isSubmitting = false;
+        FocusInput();
+    }
+
+    private IEnumerator HandleTurnTimeout()
+    {
+        if (_currentState == null) yield break;
+
+        _isSubmitting = true;
+        PlayClip(invalidWordClip, invalidWordVolume);
+        TriggerFlash(invalidFlashColor);
+        SetStatus("Time's up! Passing turn...");
+        ClearInput();
+
+        float nextDuration = GetNextRoundDuration(_currentState.roundDuration);
+
+        GameState nextState = new GameState
+        {
+            currentWord = _currentState.currentWord,
+            turn = _playerId == 1 ? 2 : 1,
+            score = _currentState.score,
+            usedWords = _currentState.usedWords,
+            roundDuration = nextDuration,
+            turnStartUnix = GetUnixTimeSeconds()
+        };
+
+        yield return StartCoroutine(PutGameState(nextState));
 
         _isSubmitting = false;
         FocusInput();
@@ -276,6 +695,8 @@ public class WordChainGame : MonoBehaviour
 
         if (!isValidWord)
         {
+            PlayClip(invalidWordClip, invalidWordVolume);
+            TriggerFlash(invalidFlashColor);
             SetStatus($"'{upperWord}' is not a valid English word.");
             _isSubmitting = false;
             FocusInput();
@@ -287,6 +708,16 @@ public class WordChainGame : MonoBehaviour
             ? Mathf.Max(-WinThreshold, _currentState.score - pull)
             : Mathf.Min(WinThreshold, _currentState.score + pull);
 
+        bool wonMatch = Mathf.Abs(nextScore) >= WinThreshold;
+        PlayClip(wonMatch ? winClip : validWordClip, wonMatch ? winVolume : validWordVolume);
+        TriggerFlash(wonMatch ? winFlashColor : validFlashColor);
+        if (wonMatch)
+        {
+            _winSoundPlayed = true;
+        }
+
+        float nextDuration = GetNextRoundDuration(_currentState.roundDuration);
+
         GameState nextState = new GameState
         {
             currentWord = upperWord,
@@ -294,7 +725,9 @@ public class WordChainGame : MonoBehaviour
             score = nextScore,
             usedWords = string.IsNullOrEmpty(_currentState.usedWords)
                 ? upperWord + ","
-                : _currentState.usedWords + upperWord + ","
+                : _currentState.usedWords + upperWord + ",",
+            roundDuration = nextDuration,
+            turnStartUnix = GetUnixTimeSeconds()
         };
 
         ClearInput();
@@ -302,6 +735,19 @@ public class WordChainGame : MonoBehaviour
 
         _isSubmitting = false;
         FocusInput();
+    }
+
+    private float GetNextRoundDuration(float currentDuration)
+    {
+        float baseDuration = currentDuration > 0f ? currentDuration : initialRoundDuration;
+        return Mathf.Max(minRoundDuration, baseDuration - timerDecreasePerTurn);
+    }
+
+    private int GetCurrentRoundNumber()
+    {
+        if (_currentState == null || timerDecreasePerTurn <= 0.01f) return 1;
+        float dropped = Mathf.Max(0f, initialRoundDuration - _currentState.roundDuration);
+        return 1 + Mathf.RoundToInt(dropped / timerDecreasePerTurn);
     }
 
     private void UpdateUI()
@@ -313,32 +759,92 @@ public class WordChainGame : MonoBehaviour
             scoreText.text = BuildTugOfWarDisplay(_currentState.score);
         }
 
+        if (roundText != null)
+        {
+            roundText.text = $"ROUND {GetCurrentRoundNumber()}";
+        }
+
         if (promptText != null)
         {
             string word = _currentState.currentWord.ToUpperInvariant();
             char nextLetter = word[word.Length - 1];
-            promptText.text = $"{word}\n<size=55%>NEXT LETTER: {nextLetter}</size>";
+            promptText.text = $"<color=#{ColorUtility.ToHtmlStringRGB(promptAccentColor)}>CHAIN WORD</color>\n{word}\n<size=52%><color=#{ColorUtility.ToHtmlStringRGB(promptAccentColor)}>NEXT LETTER: {nextLetter}</color></size>";
         }
+
+        UpdateTimerDisplay();
 
         if (!_isSubmitting)
         {
             if (_currentState.score <= -WinThreshold)
             {
-                SetStatus("PLAYER 1 WINS!  Type RESET to play again.");
+                if (!_winSoundPlayed)
+                {
+                    _winSoundPlayed = true;
+                    PlayClip(winClip, winVolume);
+                    TriggerFlash(winFlashColor);
+                }
+                SetStatus("PLAYER 1 WINS  ·  TYPE RESET");
             }
             else if (_currentState.score >= WinThreshold)
             {
-                SetStatus("PLAYER 2 WINS!  Type RESET to play again.");
+                if (!_winSoundPlayed)
+                {
+                    _winSoundPlayed = true;
+                    PlayClip(winClip, winVolume);
+                    TriggerFlash(winFlashColor);
+                }
+                SetStatus("PLAYER 2 WINS  ·  TYPE RESET");
             }
             else if (_currentState.turn == _playerId)
             {
-                SetStatus($"YOUR TURN (PLAYER {_playerId})");
+                SetStatus($"YOUR TURN  ·  PLAYER {_playerId}");
             }
             else
             {
-                SetStatus($"PLAYER {_currentState.turn}'S TURN...");
+                SetStatus($"PLAYER {_currentState.turn}'S TURN");
             }
         }
+    }
+
+    private void UpdateTimerDisplay()
+    {
+        if (_currentState == null) return;
+
+        int secondsCeil = Mathf.CeilToInt(_remainingTime);
+        float ratio = _currentState.roundDuration > 0.01f
+            ? Mathf.Clamp01(_remainingTime / _currentState.roundDuration)
+            : 0f;
+        bool isUrgent = secondsCeil <= 10;
+
+        if (timerBar != null)
+        {
+            timerBar.fillAmount = ratio;
+            if (useKrillionTheme)
+            {
+                timerBar.color = isUrgent ? timerUrgentColor : timerBarColor;
+            }
+        }
+
+        if (timerText != null)
+        {
+            timerText.text = $"{secondsCeil}s";
+            if (useKrillionTheme)
+            {
+                timerText.color = isUrgent ? timerUrgentColor : primaryTextColor;
+            }
+        }
+        else if (statusText != null && !_isSubmitting && Mathf.Abs(_currentState.score) < WinThreshold)
+        {
+            string turnLabel = _currentState.turn == _playerId
+                ? $"YOUR TURN (P{_playerId})"
+                : $"P{_currentState.turn}'S TURN";
+            statusText.text = $"{turnLabel}  ·  {secondsCeil}s";
+        }
+    }
+
+    private static double GetUnixTimeSeconds()
+    {
+        return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
     }
 
     private static string BuildTugOfWarDisplay(int score)
@@ -355,17 +861,19 @@ public class WordChainGame : MonoBehaviour
         track[markerIndex] = 'O';
 
         string sign = clamped > 0 ? "+" : "";
-        return $"P1 [-15]  {new string(track)}  [+15] P2\nSCORE: {sign}{clamped}";
+        return $"P1 [-15]  {new string(track)}  [+15] P2\nPULL: {sign}{clamped}";
     }
 
-    private static GameState CreateDefaultState()
+    private GameState CreateDefaultState()
     {
         return new GameState
         {
             currentWord = "START",
             turn = 1,
             score = 0,
-            usedWords = "START,"
+            usedWords = "START,",
+            roundDuration = initialRoundDuration,
+            turnStartUnix = GetUnixTimeSeconds()
         };
     }
 
@@ -411,6 +919,7 @@ public class WordChainGame : MonoBehaviour
     {
         if (wordInput != null)
         {
+            _previousInputText = string.Empty;
             wordInput.text = string.Empty;
         }
     }
