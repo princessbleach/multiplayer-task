@@ -122,8 +122,7 @@ public static class WordChainSceneSetup
             new Vector2(0f, -225f), new Vector2(1000f, 50f));
 
         // ---------------- LOBBY PANEL ----------------
-        GameObject lobbyPanel = CreateUIObject("LobbyPanel", canvasGo.transform);
-        StretchFull(lobbyPanel.GetComponent<RectTransform>());
+        GameObject lobbyPanel = CreateUIObject("LobbyPanel", canvasGo.transform);        StretchFull(lobbyPanel.GetComponent<RectTransform>());
         lobbyPanel.SetActive(false);
 
         TMP_Text lobbyCodeText = CreateTMPText("LobbyCodeText", lobbyPanel.transform, fontAsset,
