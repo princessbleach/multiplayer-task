@@ -26,6 +26,4 @@ I implemented the base systems of the game. I setup the game manager which conne
 
 ### ZOE CONTRIBUTIONS
 
-I implemented audio and refined the UI. When the scene starts ApplyKrillionTheme() runs and applies a unified colour palette onto every UI object. The screen flashes (when correct or incorrect) are made by creating a UI image FlashOverlay that is transparent (alpha set to 0). When TriggerFlash is called it then becomes visible. Colours can be set in the inspector. Audio shares a single AudioSource and uses PlayOneShot. 
-
-I also setup the web hosting. I built the game for platform Web and then setup a Github Pages URL.
+I implemented audio and refined the UI. When the scene starts ApplyKrillionTheme() runs and applies a unified colour palette onto every UI object. The screen flashes (when correct or incorrect) are made by creating a UI image FlashOverlay that is transparent (alpha set to 0). When TriggerFlash is called it then becomes visible. Colours can be set in the inspector. Audio shares a single AudioSource and uses PlayOneShot. I also built the game and solved any issues when building.
