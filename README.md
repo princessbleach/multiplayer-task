@@ -19,7 +19,7 @@ To play the game, all players must just open the build on their Windows device a
 
 ### JOSIE CONTRIBUTIONS
 
-
+I implemented the base systems of the game. I setup the game manager which connects to the firebase server and then created the function that runs the game against the dictionary api in order to properly check and verify words that go in the box so that it ensures only valid words are in there. I then also created the starting word segment as after a few playtests we realised that whoever was player 1 had an advantage due to always going first which was unfair, so i created a 20s phase that forces players to type the longest word, with whoever has the longer word wins and starts the round first.
 
 
 
